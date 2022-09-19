@@ -1,5 +1,5 @@
 use k8s_openapi::api::core::v1::Pod;
-use serde_json::json;
+use serde_json::{json,Value, from_str};
 use tracing::*;
 
 use kube::{
@@ -67,6 +67,40 @@ async fn main() -> anyhow::Result<()> {
     let p_patched = pods.patch("blog", &patchparams, &Patch::Merge(&patch)).await?;
     assert_eq!(p_patched.spec.unwrap().active_deadline_seconds, Some(5));
 
+    // Add finalizer in idepotent manner 
+
+    let finalizer = from_str(r#"[
+    { "op": "add", "path": "/metadata/finalizers", "value": ["temporary/fake"]}
+    ]"#).unwrap();
+
+    //let patch: Patch<&Value> = Patch::Json(json_patch::Patch(vec![finalizer]));
+    let patch: Patch<&Value> = Patch::Json(finalizer);
+    match pods.patch("blog", &PatchParams::default(), &patch).await {
+        Ok(o) => {
+            let name = o.name_any();
+            assert_eq!(p.name_any(), name);
+            info!("Patched {}", name);
+        }
+        //Err(kube::Error::Api(ae)) => assert_eq!(ae.code, 409), // if you skipped delete, for instance
+        Err(e) => return Err(e.into()),                        // any other case is probably bad
+    }
+
+    let finalizer2 = from_str(r#"[
+    { "op": "add", "path": "/metadata/finalizers/-", "value": "temporary2/fake2"}
+    ]"#).unwrap();
+
+    //let patch: Patch<&Value> = Patch::Json(json_patch::Patch(vec![finalizer]));
+    let patch: Patch<&Value> = Patch::Json(finalizer2);
+    match pods.patch("blog", &PatchParams::default(), &patch).await {
+        Ok(o) => {
+            let name = o.name_any();
+            assert_eq!(p.name_any(), name);
+            info!("Patched {}", name);
+        }
+        //Err(kube::Error::Api(ae)) => assert_eq!(ae.code, 409), // if you skipped delete, for instance
+        Err(e) => return Err(e.into()),                        // any other case is probably bad
+    }
+
     let lp = ListParams::default().fields(&format!("metadata.name={}", "blog")); // only want results for our pod
     for p in pods.list(&lp).await? {
         info!("Found Pod: {}", p.name_any());
@@ -78,6 +112,24 @@ async fn main() -> anyhow::Result<()> {
         assert_eq!(pdel.name_any(), "blog");
         info!("Deleting blog pod started: {:?}", pdel);
     });
+
+    // Remove finalizers
+    // let finalizer-remove = from_str(r#"[
+    // { "op": "remove", "path": "/metadata/finalizers"}
+    // ]"#).unwrap();
+
+    //let patch: Patch<&Value> = Patch::Json(json_patch::Patch(vec![finalizer]));
+    // let patch: Patch<&Value> = Patch::Json(finalizer);
+    // match pods.patch("blog", &PatchParams::default(), &patch).await {
+    //     Ok(o) => {
+    //         let name = o.name_any();
+    //         assert_eq!(p.name_any(), name);
+    //         info!("Patched {}", name);
+    //     }
+    //     //Err(kube::Error::Api(ae)) => assert_eq!(ae.code, 409), // if you skipped delete, for instance
+    //     Err(e) => return Err(e.into()),                        // any other case is probably bad
+    // } 
+
 
     Ok(())
 }
